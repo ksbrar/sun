@@ -18,6 +18,7 @@ define( function( require ) {
   var inherit = require( 'PHET_CORE/inherit' );
   var Line = require( 'SCENERY/nodes/Line' );
   var Node = require( 'SCENERY/nodes/Node' );
+  var KeyboardUtil = require( 'SCENERY/accessibility/KeyboardUtil' );
   var Path = require( 'SCENERY/nodes/Path' );
   var Property = require( 'AXON/Property' );
   var Rectangle = require( 'SCENERY/nodes/Rectangle' );
@@ -69,7 +70,10 @@ define( function( require ) {
 
       // tandem
       tandem: Tandem.required,
-      phetioType: ComboBoxIO
+      phetioType: ComboBoxIO,
+
+      // a11y
+      a11yButtonLabel: '' // {string} accessible label for the button that opens this combobox
     }, options );
 
     // validate option values
@@ -96,9 +100,14 @@ define( function( require ) {
       fill: options.listFill,
       stroke: options.listStroke,
       lineWidth: options.listLineWidth,
-      visible: false
+      visible: false,
       // Not instrumented for PhET-iO because the list's location isn't valid until it has been popped up.
       // See https://github.com/phetsims/phet-io/issues/1102
+      
+      // a11y 
+      tagName: 'ul',
+      ariaRole: 'menu',
+      groupFocusHighlight: true
     } );
     listParent.addChild( listNode );
 
@@ -146,6 +155,21 @@ define( function( require ) {
       }
     };
 
+    // hide the list of combo box items
+    var closePopup = function() {
+      self.startEvent( 'user', 'popupHidden' );
+      display.removeInputListener( clickToDismissListener );
+      listNode.visible = false;
+      self.endEvent();
+    };
+
+    // button, will be set to correct value when property observer is registered
+    var buttonNode = new ButtonNode( new ComboBoxItemNode( items[ 0 ], itemWidth, itemHeight, options.itemXMargin, {
+      tandem: options.tandem.createTandem( 'buttonNode', { enabled: false } ),
+      a11yButtonLabel: options.a11yButtonLabel
+    } ), options );
+    self.addChild( buttonNode );
+
     // populate list with items
     items.forEach( function( item, index ) {
       var itemNodeOptions = _.extend( {
@@ -163,14 +187,20 @@ define( function( require ) {
       itemNodeOptions.tandem = options.tandem.createTandem( itemNodeOptions.tandemName || 'comboBoxItemNode' );
 
       // Create the list item node itself
-      listNode.addChild( new ComboBoxItemNode( item, itemWidth, itemHeight, options.itemXMargin, itemNodeOptions ) );
-    } );
+      var comboboxItem = new ComboBoxItemNode( item, itemWidth, itemHeight, options.itemXMargin, itemNodeOptions );
 
-    // button, will be set to correct value when property observer is registered
-    var buttonNode = new ButtonNode( new ComboBoxItemNode( items[ 0 ], itemWidth, itemHeight, options.itemXMargin, {
-      tandem: options.tandem.createTandem( 'buttonNode', { enabled: false } )
-    } ), options );
-    self.addChild( buttonNode );
+      // a11y - select the property and close on a click event from assistive technology, must be removed in disposal
+      // of combobox item
+      comboboxItem.a11yClickListener = comboboxItem.itemWrapper.addAccessibleInputListener( {
+        click: function() {
+          property.value = item.value;
+          closePopup();
+          buttonNode.focus();  
+        }
+      } );
+
+      listNode.addChild( comboboxItem );
+    } );
 
     //TODO handle scale and rotation
     // Handles the coordinate transform required to make the list pop up near the button.
@@ -206,13 +236,7 @@ define( function( require ) {
     var clickToDismissListener = {
       down: function() {
         if ( enableClickToDismissListener ) {
-
-          self.startEvent( 'user', 'popupHidden' );
-
-          display.removeInputListener( clickToDismissListener );
-          listNode.visible = false;
-
-          self.endEvent();
+          closePopup();
         }
         else {
           enableClickToDismissListener = true;
@@ -220,21 +244,78 @@ define( function( require ) {
       }
     };
 
+    // @private {ComboboxItemNode} - tracks which item node has focus to make it easy to focus next/previous item
+    // after keydown
+    this.focusedItem = null;
+    var handleKeyDown = listNode.addAccessibleInputListener( {
+      keydown: function( event ) { 
+        if ( event.keyCode === KeyboardUtil.KEY_ESCAPE ) {
+          closePopup();
+          buttonNode.focus();
+        }
+        else if ( event.keyCode === KeyboardUtil.KEY_DOWN_ARROW || event.keyCode === KeyboardUtil.KEY_UP_ARROW ) {
+          var direction = event.keyCode === KeyboardUtil.KEY_DOWN_ARROW ? 1 : -1; 
+
+          // get the next/previous item in the list and focus it
+          for ( var i = 0; i < listNode.children.length; i++ ) {
+            if ( self.focusedItem === listNode.children[ i ] ) {
+              var nextItem = listNode.children[ i + direction ];
+              if ( nextItem ) {
+                self.focusedItem = nextItem;
+                self.focusedItem.a11yFocusButton();
+                break;
+              }
+            }
+          }
+        }
+        else if ( event.keyCode === KeyboardUtil.KEY_TAB ) {
+          closePopup();
+        }
+      }
+    } );
+
     // button interactivity
     buttonNode.cursor = 'pointer';
-    buttonNode.addInputListener( {
-      down: function() {
-        if ( !listNode.visible ) {
-          self.startEvent( 'user', 'popupShown' );
 
-          moveList();
-          listNode.moveToFront();
-          listNode.visible = true;
-          enableClickToDismissListener = false;
-          display = self.getUniqueTrail().rootNode().getRootedDisplays()[ 0 ];
-          display.addInputListener( clickToDismissListener );
+    // open the popup containing the list of items
+    var openPopup = function() {
+      if ( !listNode.visible ) {
+        self.startEvent( 'user', 'popupShown' );
 
-          self.endEvent();
+        moveList();
+        listNode.moveToFront();
+        listNode.visible = true;
+        enableClickToDismissListener = false;
+        display = self.getUniqueTrail().rootNode().getRootedDisplays()[ 0 ];
+        display.addInputListener( clickToDismissListener );
+
+        self.endEvent();
+      }
+    };
+    buttonNode.addInputListener( { down: openPopup } );
+    buttonNode.a11yListener = buttonNode.addAccessibleInputListener( {
+      click: function() {
+        if ( listNode.visible ) {
+          closePopup();
+          buttonNode.focus();
+        }
+        else {
+          openPopup();
+
+          // focus the selected item
+          for ( var i = 0; i < listNode.children.length; i++ ) {
+            if ( property.value === listNode.children[ i ].item.value ) {
+              self.focusedItem = listNode.children[ i ];
+              self.focusedItem.a11yFocusButton();
+            }
+          }
+        }
+      },
+      keydown: function( event ) {
+        if ( listNode.visible ) {
+          if ( event.keyCode === KeyboardUtil.KEY_ESCAPE ) {
+            closePopup();
+          }
         }
       }
     } );
@@ -251,7 +332,8 @@ define( function( require ) {
         return item.value === value;
       } );
       buttonNode.setItemNode( new ComboBoxItemNode( item, itemWidth, itemHeight, options.itemXMargin, {
-        tandem: options.tandem.createTandem( 'buttonNode', { enabled: false } )
+        tandem: options.tandem.createTandem( 'buttonNode', { enabled: false } ),
+        a11yLabel: item.options.a11yLabel
       } ) );
     };
     property.link( propertyObserver );
@@ -268,6 +350,9 @@ define( function( require ) {
     // @private called by dispose
     this.disposeComboBox = function() {
       self.enabledProperty.unlink( enabledObserver );
+
+      // remove a11y listeners
+      listNode.removeAccessibleInputListener( handleKeyDown );
 
       // Unregister itemNode tandems as well
       for ( var i = 0; i < listNode.children.length; i++ ) {
@@ -330,8 +415,10 @@ define( function( require ) {
       buttonLineWidth: 1,
       buttonCornerRadius: 8,
       buttonXMargin: 10,
-      buttonYMargin: 4
+      buttonYMargin: 4,
 
+      // a11y
+      a11yButtonLabel: '' // {string} accessible label for the button
     }, options );
 
     Node.call( this );
@@ -379,6 +466,7 @@ define( function( require ) {
     this.addChild( selectedItemParent );
 
     // @private
+    var self = this;
     this.setItemNode = function( itemNode ) {
       // Dispose any existing item, see https://github.com/phetsims/sun/issues/299
       while ( selectedItemParent.children.length ) {
@@ -389,6 +477,10 @@ define( function( require ) {
       selectedItemParent.addChild( itemNode );
       itemNode.left = options.buttonXMargin;
       itemNode.top = options.buttonYMargin;
+
+      itemNode.a11yShowItem( false );
+
+      self.accessibleDescription = itemNode.a11yLabel + ', selected';
     };
     this.setItemNode( itemNode );
 
@@ -398,6 +490,18 @@ define( function( require ) {
     arrow.left = separator.right + options.buttonXMargin;
     arrow.centerY = background.centerY;
 
+    // a11y
+    this.tagName = 'button';
+    this.accessibleLabel = options.a11yButtonLabel;
+
+    // the button's description aria-describes this button, so it is read every time it receives focus
+    this.parentContainerTagName = 'div';
+    this.ariaDescribedByNode = self;
+    this.ariaDescriptionContent = 'DESCRIPTION';
+
+    // signify to AT that this button opens a menu
+    this.setAccessibleAttribute( 'aria-haspopup', true );
+
     this.disposeButtonNode = function() {
       separator.dispose();
       arrow.dispose();
@@ -406,6 +510,9 @@ define( function( require ) {
       options.tandem.createTandem( 'arrow' ).removeInstance( arrow );
       options.tandem.createTandem( 'selectedItemParent' ).removeInstance( selectedItemParent );
       itemNode.dispose();
+
+      // dispose a11y
+      self.removeAccessibleInputListener( self.a11yListener );
     };
   }
 
@@ -417,6 +524,7 @@ define( function( require ) {
       Node.prototype.dispose.call( this );
     }
   } );
+
 
   /**
    * A wrapper around the combo box item, adds margins, etc.
@@ -435,18 +543,39 @@ define( function( require ) {
       children: [ item.node ],
       pickable: false,
       x: xMargin,
-      centerY: height / 2
+      centerY: height / 2,
+
+      tagName: 'button',
+      ariaRole: 'menuitem'
     } );
 
     options = _.extend( {
       tandem: Tandem.required,
       phetioType: ComboBoxItemNodeIO,
-      children: [ this.itemWrapper ]
+      children: [ this.itemWrapper ],
+
+      // a11y
+      tagName: 'li',
+      // tagName: 'button',
+      // ariaRole: 'menuitem'
+      ariaRole: 'none',
+
+      // label for the button clickable item
+      a11yLabel: ''
     }, options );
 
     this.item = item;
 
+    this.a11yLabel = options.a11yLabel;
+
+    // @private {null|function} - listener called when button clicked with AT
+    this.a11yClickListener = null;
+
     Rectangle.call( this, 0, 0, width, height, options );
+
+    // the highlight wraps around the entire item rectangle
+    this.itemWrapper.focusHighlight = Shape.bounds( this.itemWrapper.parentToLocalBounds( this.localBounds ) );
+    this.itemWrapper.accessibleLabel = options.a11yLabel;
   }
 
   sun.register( 'ComboBox.ItemNode', ComboBoxItemNode );
@@ -457,10 +586,22 @@ define( function( require ) {
      * @public
      */
     dispose: function() {
+
+      // the item in the button will not have a listener
+      this.a11yClickListener && this.itemWrapper.removeAccessibleInputListener( this.a11yClickListener );
       this.itemWrapper.dispose();
 
       Rectangle.prototype.dispose.call( this );
-    }
+    },
+
+    a11yShowItem: function( visible ) {
+      this.itemWrapper.tagName = visible ? 'button' : null;
+      this.tagName = visible ? 'li' : null;
+    },
+
+    a11yFocusButton: function() {
+      this.itemWrapper.focus();
+    }    
   } );
 
   return ComboBox;
