@@ -106,7 +106,7 @@ define( function( require ) {
       
       // a11y 
       tagName: 'ul',
-      ariaRole: 'menu',
+      ariaRole: 'listbox',
       groupFocusHighlight: true
     } );
     listParent.addChild( listNode );
@@ -159,6 +159,9 @@ define( function( require ) {
     var closePopup = function() {
       self.startEvent( 'user', 'popupHidden' );
       display.removeInputListener( clickToDismissListener );
+
+      // make sure focused list item is no longer focusable
+      self.focusedItem.focusable = false;
       listNode.visible = false;
       self.endEvent();
     };
@@ -171,6 +174,7 @@ define( function( require ) {
     self.addChild( buttonNode );
 
     // populate list with items
+    var closeOnClick = true;
     items.forEach( function( item, index ) {
       var itemNodeOptions = _.extend( {
         left: options.buttonXMargin,
@@ -191,11 +195,14 @@ define( function( require ) {
 
       // a11y - select the property and close on a click event from assistive technology, must be removed in disposal
       // of combobox item
-      comboboxItem.a11yClickListener = comboboxItem.itemWrapper.addAccessibleInputListener( {
-        click: function() {
-          property.value = item.value;
-          closePopup();
-          buttonNode.focus();  
+      comboboxItem.a11yClickListener = comboboxItem.addAccessibleInputListener( {
+        keydown: function( event ) {
+          if ( KeyboardUtil.KEY_ENTER === event.keyCode || KeyboardUtil.KEY_ENTER === event.keyCode ) {
+            closeOnClick = false;
+            property.value = item.value;
+            closePopup();
+            buttonNode.focus();  
+          }
         }
       } );
 
@@ -261,6 +268,9 @@ define( function( require ) {
             if ( self.focusedItem === listNode.children[ i ] ) {
               var nextItem = listNode.children[ i + direction ];
               if ( nextItem ) {
+                // previous item should not be focusable
+                self.focusedItem.focusable = false;
+
                 self.focusedItem = nextItem;
                 self.focusedItem.a11yFocusButton();
                 break;
@@ -295,7 +305,11 @@ define( function( require ) {
     buttonNode.addInputListener( { down: openPopup } );
     buttonNode.a11yListener = buttonNode.addAccessibleInputListener( {
       click: function() {
-        if ( listNode.visible ) {
+        if ( !closeOnClick ) {
+          closeOnClick = true;
+          return;
+        }
+        if ( listNode.visible && closeOnClick ) {
           closePopup();
           buttonNode.focus();
         }
@@ -500,7 +514,7 @@ define( function( require ) {
     this.ariaDescriptionContent = 'DESCRIPTION';
 
     // signify to AT that this button opens a menu
-    this.setAccessibleAttribute( 'aria-haspopup', true );
+    this.setAccessibleAttribute( 'aria-haspopup', 'listbox' );
 
     this.disposeButtonNode = function() {
       separator.dispose();
@@ -545,8 +559,8 @@ define( function( require ) {
       x: xMargin,
       centerY: height / 2,
 
-      tagName: 'button',
-      ariaRole: 'menuitem'
+      // tagName: 'button',
+      // ariaRole: 'menuitem'
     } );
 
     options = _.extend( {
@@ -558,7 +572,7 @@ define( function( require ) {
       tagName: 'li',
       // tagName: 'button',
       // ariaRole: 'menuitem'
-      ariaRole: 'none',
+      ariaRole: 'option',
 
       // label for the button clickable item
       a11yLabel: ''
@@ -572,6 +586,7 @@ define( function( require ) {
     this.a11yClickListener = null;
 
     Rectangle.call( this, 0, 0, width, height, options );
+    this.accessibleLabel = options.a11yLabel;
 
     // the highlight wraps around the entire item rectangle
     this.itemWrapper.focusHighlight = Shape.bounds( this.itemWrapper.parentToLocalBounds( this.localBounds ) );
@@ -588,7 +603,7 @@ define( function( require ) {
     dispose: function() {
 
       // the item in the button will not have a listener
-      this.a11yClickListener && this.itemWrapper.removeAccessibleInputListener( this.a11yClickListener );
+      this.a11yClickListener && this.removeAccessibleInputListener( this.a11yClickListener );
       this.itemWrapper.dispose();
 
       Rectangle.prototype.dispose.call( this );
@@ -600,7 +615,9 @@ define( function( require ) {
     },
 
     a11yFocusButton: function() {
-      this.itemWrapper.focus();
+      this.focusable = true;
+      this.focus();
+      // this.itemWrapper.focus();
     }    
   } );
 
